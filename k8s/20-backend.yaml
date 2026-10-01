@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: backend, namespace: analytics }
+spec:
+  replicas: 2
+  strategy: { rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }   # zero-downtime deploys
+  selector: { matchLabels: { app: backend } }
+  template:
+    metadata:
+      labels: { app: backend }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "5000", prometheus.io/path: /metrics }
+    spec:
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:          # spread replicas so one node loss != outage
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: { matchLabels: { app: backend } }
+      containers:
+        - name: backend
+          image: ghcr.io/YOUR_GH_USER/rta-backend:latest
+          ports: [{ containerPort: 5000, name: http }]
+          envFrom:
+            - configMapRef: { name: analytics-config }
+            - secretRef: { name: analytics-secret }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          lifecycle:
+            preStop: { exec: { command: ["sleep", "5"] } }   # let the Service drop us before SIGTERM
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: backend, namespace: analytics }
+spec:
+  selector: { app: backend }
+  ports: [{ port: 5000, targetPort: http, name: http }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: backend, namespace: analytics }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: backend }
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 65 } }
+    - type: Resource
+      resource: { name: memory, target: { type: Utilization, averageUtilization: 75 } }
+  behavior:
+    scaleUp: { stabilizationWindowSeconds: 0, policies: [{ type: Percent, value: 100, periodSeconds: 30 }] }
+    # scale down slowly: dropping a pod disconnects its WebSockets (clients auto-reconnect)
+    scaleDown: { stabilizationWindowSeconds: 300, policies: [{ type: Pods, value: 1, periodSeconds: 60 }] }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: backend, namespace: analytics }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: backend } }
