@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import random
+import ssl
 import time
 from collections import deque
 from pathlib import Path
@@ -27,6 +28,15 @@ STREAM_URL = "https://stream.wikimedia.org/v2/stream/recentchange"
 # Wikimedia's User-Agent policy asks clients to identify themselves.
 USER_AGENT = "RealTimeAnalyticsDashboard/1.0 (https://uiucwangjiajun.com) aiohttp"
 log = logging.getLogger("wikipedia")
+
+
+def ssl_context() -> ssl.SSLContext:
+    """Prefer certifi's CA bundle: standalone Python builds (uv, pyenv) may not see the OS store."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
 
 
 def to_event(rc: dict) -> dict | None:
@@ -165,7 +175,8 @@ async def report(fwd: Forwarder, every: int = 10):
 
 async def main(a):
     fwd = Forwarder(a.api, a.batch, a.flush_ms)
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(ssl=ssl_context())
+    async with aiohttp.ClientSession(connector=connector) as session:
         producer = replay(a.replay, a.rate, fwd) if a.replay else consume_sse(a.url, fwd, session)
         await asyncio.gather(producer, fwd.run(session), report(fwd))
 
