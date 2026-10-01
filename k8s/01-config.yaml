@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: analytics-config, namespace: analytics }
+data:
+  REDIS_URL: redis://redis:6379/0
+  WEB_CONCURRENCY: "2"
+  WORKER_CONNECTIONS: "2000"
+  BROADCAST_WINDOW_MS: "10"
+  DB_POOL_MAX: "10"
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: analytics-secret, namespace: analytics }
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: change-me
+  DATABASE_URL: postgresql://postgres:change-me@postgres:5432/analytics

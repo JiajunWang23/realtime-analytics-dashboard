@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: analytics }
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 5s, retries: 10 }
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxclients", "10000"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 10 }
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/analytics
+      REDIS_URL: redis://redis:6379/0
+      WEB_CONCURRENCY: "2"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    deploy: { replicas: 2 }      # two backends -> proves cross-instance fan-out via Redis pub/sub
+
+  frontend:
+    build: ./frontend
+    ports: ["8080:80"]
+    depends_on: [backend]
+
+  simulator:
+    image: python:3.12-slim
+    command: ["sh", "-c", "pip install -q aiohttp && python /scripts/simulate.py --url http://backend:5000 --rate 5 --batch 5"]
+    volumes: [./scripts:/scripts:ro]
+    depends_on: [backend]
+    profiles: [demo]
+
+volumes:
+  pgdata:
