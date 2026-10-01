@@ -18,7 +18,7 @@ spec:
           labelSelector: { matchLabels: { app: backend } }
       containers:
         - name: backend
-          image: ghcr.io/YOUR_GH_USER/rta-backend:latest
+          image: ghcr.io/jiajunwang23/rta-backend:latest
           ports: [{ containerPort: 5000, name: http }]
           envFrom:
             - configMapRef: { name: analytics-config }

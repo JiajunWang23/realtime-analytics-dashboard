@@ -118,10 +118,10 @@ docker compose up --scale backend=3                        # watch cross-pod fan
 
 ### Kubernetes (minikube / kind / EKS)
 ```bash
-docker build -f backend/Dockerfile -t ghcr.io/<you>/rta-backend:latest .
-docker build -t ghcr.io/<you>/rta-frontend:latest frontend
-docker build -t ghcr.io/<you>/rta-wikipedia-connector:latest connectors
-# push all three, then replace YOUR_GH_USER in k8s/*.yaml
+docker build -f backend/Dockerfile -t ghcr.io/jiajunwang23/rta-backend:latest .
+docker build -t ghcr.io/jiajunwang23/rta-frontend:latest frontend
+docker build -t ghcr.io/jiajunwang23/rta-wikipedia-connector:latest connectors
+# push all three, (k8s/ already points at ghcr.io/jiajunwang23)
 kubectl apply -f k8s/
 kubectl -n analytics get hpa -w                            # needs metrics-server
 ```

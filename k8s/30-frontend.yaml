@@ -9,7 +9,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: ghcr.io/YOUR_GH_USER/rta-frontend:latest
+          image: ghcr.io/jiajunwang23/rta-frontend:latest
           ports: [{ containerPort: 80, name: http }]
           readinessProbe: { httpGet: { path: /, port: http }, periodSeconds: 5 }
           resources:
