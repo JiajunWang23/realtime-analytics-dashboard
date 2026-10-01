@@ -89,7 +89,15 @@ Query benchmark detail (5,014,299 events, 258,919 rollup rows, mean of 5 warm ru
 
 ## Run it
 
-### Local (no Docker)
+### macOS, one double-click
+Double-click **`start.command`**. If Docker is running it uses `docker compose`; otherwise it
+needs nothing pre-installed except Xcode Command Line Tools: Python 3.12 comes from `uv`,
+PostgreSQL 16 from the `pgserver` wheel, Redis is built from source once (~1 min), and the
+prebuilt dashboard in `frontend/dist` is served by the backend. It connects to the **live**
+Wikipedia stream and opens http://localhost:5050 (not :5000, which macOS reserves for AirPlay).
+Logs are in `.run/`.
+
+### Local, manual (no Docker)
 ```bash
 # Postgres on :5432 (db "analytics") and Redis on :6379 must be running
 cd backend && pip install -r requirements.txt

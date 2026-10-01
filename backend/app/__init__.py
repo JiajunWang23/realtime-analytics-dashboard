@@ -1,11 +1,12 @@
 import json
 import logging
+import os
 import queue
 import time
 
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_sock import Sock
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -164,6 +165,21 @@ def create_app(cfg=Config) -> Flask:
     @app.get("/rta.js")
     def rta_js():
         return send_file(tracker_js, mimetype="application/javascript", max_age=3600)
+
+    # ---------------- optional: serve the built dashboard (single-origin local runs) ----------
+    dist = Path(os.getenv("FRONTEND_DIST", Path(__file__).resolve().parents[2] / "frontend" / "dist"))
+    if (dist / "index.html").exists():
+        @app.get("/")
+        def spa_index():
+            return send_from_directory(dist, "index.html")
+
+        @app.get("/assets/<path:name>")
+        def spa_assets(name):
+            return send_from_directory(dist / "assets", name, max_age=86400)
+
+        @app.get("/favicon.svg")
+        def spa_favicon():
+            return send_from_directory(dist, "favicon.svg", max_age=86400)
 
     # ---------------- ops ----------------
     @app.get("/healthz")
