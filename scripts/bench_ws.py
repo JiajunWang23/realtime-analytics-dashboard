@@ -69,7 +69,7 @@ async def main(a):
             tag = uuid.uuid4().hex
             sent_at[tag] = time.perf_counter()
             async with s.post(f"{a.http}/api/events", json={
-                    "type": "bench", "user_id": "bench", "props": {"bench": tag}}) as resp:
+                    "source": "demo", "type": "bench", "user_id": "bench", "props": {"bench": tag}}) as resp:
                 assert resp.status == 202, await resp.text()
             await asyncio.sleep(a.interval)
     await asyncio.sleep(2)
@@ -88,7 +88,8 @@ async def main(a):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--http", default="http://localhost:5000")
-    p.add_argument("--ws", default="ws://localhost:5000/ws")
+    p.add_argument("--ws", default="ws://localhost:5000/ws?source=demo",
+                   help="use /ws (no ?source) to receive every stream, e.g. Wikipedia too")
     p.add_argument("--clients", type=int, default=1)
     p.add_argument("--events", type=int, default=200)
     p.add_argument("--interval", type=float, default=0.05)

@@ -20,7 +20,7 @@ def make_event(n_users: int) -> dict:
     value = round(random.lognormvariate(3.3, 0.6), 2) if t == "purchase" else (
         1.0 if t != "error" else 0.0)
     return {"type": t, "user_id": f"u{int(random.paretovariate(1.2)) % n_users}",
-            "value": value, "props": {"page": random.choice(PAGES)},
+            "value": value, "props": {"path": random.choice(PAGES)},
             "ts": int(time.time() * 1000)}
 
 

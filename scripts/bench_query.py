@@ -6,7 +6,7 @@
 Strategies compared, for the dashboard queries (per-minute series over 24h, type
 breakdown over 24h, one type drill-down over 6h):
   A. raw table, no secondary indexes (sequential scans)
-  B. raw table + BRIN(occurred_at) + B-tree(event_type, occurred_at)
+  B. raw table + BRIN(occurred_at) + B-tree(source, event_type, occurred_at)
   C. pre-aggregated per-minute rollup table (what the API actually serves)
 """
 import argparse
@@ -20,44 +20,47 @@ DSN = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/a
 
 QUERIES_RAW = {
     "series_24h": """SELECT date_trunc('minute', occurred_at) b, event_type, count(*), sum(value)
-                     FROM events WHERE occurred_at >= now() - interval '24 hours'
+                     FROM events WHERE source = 'demo' AND occurred_at >= now() - interval '24 hours'
                      GROUP BY 1, 2""",
     "breakdown_24h": """SELECT event_type, count(*), sum(value) FROM events
-                        WHERE occurred_at >= now() - interval '24 hours' GROUP BY 1""",
+                        WHERE source = 'demo' AND occurred_at >= now() - interval '24 hours'
+                        GROUP BY 1""",
     "drilldown_purchase_6h": """SELECT date_trunc('minute', occurred_at), count(*), sum(value)
-                                FROM events WHERE event_type = 'purchase'
+                                FROM events WHERE source = 'demo' AND event_type = 'purchase'
                                 AND occurred_at >= now() - interval '6 hours' GROUP BY 1""",
 }
 QUERIES_ROLLUP = {
     "series_24h": """SELECT bucket, event_type, cnt, value_sum FROM event_rollup_minute
-                     WHERE bucket >= now() - interval '24 hours'""",
+                     WHERE source = 'demo' AND bucket >= now() - interval '24 hours'""",
     "breakdown_24h": """SELECT event_type, sum(cnt), sum(value_sum) FROM event_rollup_minute
-                        WHERE bucket >= now() - interval '24 hours' GROUP BY 1""",
+                        WHERE source = 'demo' AND bucket >= now() - interval '24 hours'
+                        GROUP BY 1""",
     "drilldown_purchase_6h": """SELECT bucket, cnt, value_sum FROM event_rollup_minute
-                                WHERE event_type = 'purchase'
+                                WHERE source = 'demo' AND event_type = 'purchase'
                                 AND bucket >= now() - interval '6 hours'""",
 }
 INDEXES = {
     "events_occurred_brin": "CREATE INDEX events_occurred_brin ON events USING BRIN (occurred_at)",
-    "events_type_time_idx": "CREATE INDEX events_type_time_idx ON events (event_type, occurred_at DESC)",
+    "events_src_type_time_idx": "CREATE INDEX events_src_type_time_idx ON events "
+                                "(source, event_type, occurred_at DESC)",
 }
 
 SEED_SQL = """
-INSERT INTO events (event_type, user_id, value, props, occurred_at, ingested_at)
-SELECT (ARRAY['page_view','page_view','page_view','page_view','page_view','page_view',
+INSERT INTO events (source, event_type, user_id, value, props, occurred_at, ingested_at)
+SELECT 'demo', (ARRAY['page_view','page_view','page_view','page_view','page_view','page_view',
               'click','click','click','add_to_cart','purchase','signup','error'])[1 + (random()*12)::int],
        'u' || (random()*50000)::int,
        round((random()*100)::numeric, 2),
-       jsonb_build_object('page', (ARRAY['/','/pricing','/docs','/blog','/checkout'])[1 + (random()*4)::int]),
+       jsonb_build_object('path', (ARRAY['/','/pricing','/docs','/blog','/checkout'])[1 + (random()*4)::int]),
        ts, ts
 FROM (SELECT now() - interval '30 days' + (g * (interval '30 days' / %(n)s)) AS ts
       FROM generate_series(1, %(n)s) g) s
 """
 BACKFILL_ROLLUP = """
-INSERT INTO event_rollup_minute (bucket, event_type, cnt, value_sum)
-SELECT date_trunc('minute', occurred_at), event_type, count(*), sum(value)
-FROM events GROUP BY 1, 2
-ON CONFLICT (bucket, event_type) DO UPDATE SET cnt = EXCLUDED.cnt, value_sum = EXCLUDED.value_sum
+INSERT INTO event_rollup_minute (source, bucket, event_type, cnt, value_sum)
+SELECT source, date_trunc('minute', occurred_at), event_type, count(*), sum(value)
+FROM events WHERE source = 'demo' GROUP BY 1, 2, 3
+ON CONFLICT (source, bucket, event_type) DO UPDATE SET cnt = EXCLUDED.cnt, value_sum = EXCLUDED.value_sum
 """
 
 
@@ -82,7 +85,7 @@ def main(a):
         t = time.time()
         cur.execute("SET maintenance_work_mem = '512MB'")
         cur.execute(SEED_SQL, {"n": a.seed})
-        cur.execute("TRUNCATE event_rollup_minute")
+        cur.execute("DELETE FROM event_rollup_minute WHERE source = 'demo'")
         cur.execute(BACKFILL_ROLLUP)
         cur.execute("VACUUM ANALYZE events")
         cur.execute("VACUUM ANALYZE event_rollup_minute")

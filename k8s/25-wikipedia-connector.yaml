@@ -1,0 +1,19 @@
+# Single consumer of the public Wikimedia stream. Recreate (never two at once) so events
+# aren't double-counted during a rollout; it resumes via Last-Event-ID after reconnects.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: wikipedia-connector, namespace: analytics }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: wikipedia-connector } }
+  template:
+    metadata: { labels: { app: wikipedia-connector } }
+    spec:
+      containers:
+        - name: connector
+          image: ghcr.io/YOUR_GH_USER/rta-wikipedia-connector:latest
+          args: ["--api", "http://backend:5000"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }

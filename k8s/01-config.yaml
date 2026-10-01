@@ -7,6 +7,8 @@ data:
   WORKER_CONNECTIONS: "2000"
   BROADCAST_WINDOW_MS: "10"
   DB_POOL_MAX: "10"
+  SOURCES: site,wikipedia,demo
+  COLLECT_ORIGINS: https://uiucwangjiajun.com,https://www.uiucwangjiajun.com
 ---
 apiVersion: v1
 kind: Secret
