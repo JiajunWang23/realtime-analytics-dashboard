@@ -24,11 +24,12 @@ POD = f"{socket.gethostname()}:{os.getpid()}"
 
 
 class Client:
-    __slots__ = ("q", "dropped")
+    __slots__ = ("q", "dropped", "source")
 
-    def __init__(self, maxsize=256):
+    def __init__(self, source: str = "*", maxsize=256):
         self.q: queue.Queue = queue.Queue(maxsize=maxsize)
         self.dropped = 0
+        self.source = source            # subscribed stream; "*" = everything
 
     def offer(self, frame: str):
         try:
@@ -46,8 +47,8 @@ class Hub:
         self.started = False
 
     # ---- client registry -------------------------------------------------
-    def register(self) -> Client:
-        c = Client()
+    def register(self, source: str = "*") -> Client:
+        c = Client(source)
         with self.lock:
             self.clients.add(c)
             WS_CLIENTS.set(len(self.clients))
@@ -58,9 +59,11 @@ class Hub:
             self.clients.discard(c)
             WS_CLIENTS.set(len(self.clients))
 
-    def broadcast(self, frame: str):
+    def broadcast(self, frame: str, source: str | None = None):
+        """Send to every client, or only to subscribers of `source` (plus "*" subscribers)."""
         with self.lock:
-            targets = list(self.clients)
+            targets = [c for c in self.clients
+                       if source is None or c.source == source or c.source == "*"]
         for c in targets:
             c.offer(frame)
 
@@ -99,15 +102,33 @@ class Hub:
                     batch.append(self.inbox.get(timeout=left))
                 except queue.Empty:
                     break
-            events = []
+            by_source: dict[str, list] = {}
             for raw in batch:
                 try:
-                    events.extend(json.loads(raw).get("events", []))
+                    for e in json.loads(raw).get("events", []):
+                        by_source.setdefault(e.get("source", "demo"), []).append(e)
                 except ValueError:
                     continue
-            if events and self.clients:
-                self.broadcast(json.dumps({"kind": "events", "events": events,
-                                           "sent_at": int(time.time() * 1000)}))
+            if not self.clients:
+                continue
+            with self.lock:
+                wanted = {c.source for c in self.clients}
+            now_ms = int(time.time() * 1000)
+            # serialize once per source, and only for sources someone is watching
+            for src, events in by_source.items():
+                if src in wanted:
+                    frame = json.dumps({"kind": "events", "events": events, "sent_at": now_ms})
+                    with self.lock:
+                        subs = [c for c in self.clients if c.source == src]
+                    for c in subs:
+                        c.offer(frame)
+            if "*" in wanted:
+                everything = [e for evs in by_source.values() for e in evs]
+                frame = json.dumps({"kind": "events", "events": everything, "sent_at": now_ms})
+                with self.lock:
+                    star = [c for c in self.clients if c.source == "*"]
+                for c in star:
+                    c.offer(frame)
 
     def _stats_tick(self):
         while True:
@@ -116,6 +137,7 @@ class Hub:
                 # heartbeat key per worker; dead pods age out after 5s
                 r().set(f"ws:clients:{POD}", len(self.clients), ex=5)
                 if self.clients:
-                    self.broadcast(json.dumps({"kind": "stats", **stats.live_summary()}))
+                    self.broadcast(json.dumps({"kind": "stats",
+                                               **stats.all_summaries(self.cfg.SOURCES)}))
             except Exception as exc:
                 log.warning("stats tick failed: %s", exc)

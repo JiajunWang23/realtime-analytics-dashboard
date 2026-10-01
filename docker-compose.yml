@@ -11,11 +11,12 @@ services:
     healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 10 }
 
   backend:
-    build: ./backend
+    build: { context: ., dockerfile: backend/Dockerfile }
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/analytics
       REDIS_URL: redis://redis:6379/0
       WEB_CONCURRENCY: "2"
+      COLLECT_ORIGINS: https://uiucwangjiajun.com,https://www.uiucwangjiajun.com,http://localhost:8080
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -25,6 +26,13 @@ services:
     build: ./frontend
     ports: ["8080:80"]
     depends_on: [backend]
+
+  # Live Wikimedia EventStreams -> /api/events (source=wikipedia), ~30 events/s.
+  wikipedia:
+    build: ./connectors
+    command: ["--api", "http://backend:5000"]
+    depends_on: [backend]
+    restart: unless-stopped
 
   simulator:
     image: python:3.12-slim

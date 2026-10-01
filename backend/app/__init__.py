@@ -1,8 +1,11 @@
 import json
 import logging
 import queue
+import time
 
-from flask import Flask, jsonify, request
+from pathlib import Path
+
+from flask import Flask, jsonify, request, send_file
 from flask_sock import Sock
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -10,11 +13,13 @@ from . import stats
 from .config import Config
 from .db import apply_schema, get_conn, init_pool
 from .hub import Hub
-from .ingest import ValidationError, ingest, validate
+from .ingest import SOURCE_RE, ValidationError, ingest, validate
 from .metrics import WS_FRAMES
 from .redis_client import init_redis, r
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+
+BOT_UA = ("bot", "crawl", "spider", "slurp", "headless", "lighthouse", "preview", "curl", "python-")
 
 
 def create_app(cfg=Config) -> Flask:
@@ -31,53 +36,114 @@ def create_app(cfg=Config) -> Flask:
 
     @app.after_request
     def cors(resp):
-        resp.headers["Access-Control-Allow-Origin"] = cfg.CORS_ORIGIN
+        origin = request.headers.get("Origin")
+        if request.path == "/api/collect":
+            if origin in cfg.COLLECT_ORIGINS:
+                resp.headers["Access-Control-Allow-Origin"] = origin
+                resp.headers["Vary"] = "Origin"
+        else:
+            resp.headers["Access-Control-Allow-Origin"] = cfg.CORS_ORIGIN
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         return resp
 
-    # ---------------- ingest ----------------
-    @app.post("/api/events")
-    def post_events():
-        body = request.get_json(silent=True)
-        raw = body.get("events") if isinstance(body, dict) and "events" in body else [body]
+    def _accept(raw, source=None):
         if not isinstance(raw, list) or not raw:
             return jsonify(error="body must be an event or {events: [...]}"), 400
         if len(raw) > cfg.MAX_BATCH:
             return jsonify(error=f"max {cfg.MAX_BATCH} events per request"), 413
         try:
-            events = [validate(e) for e in raw]
+            events = [validate(e, source) for e in raw]
         except (ValidationError, ValueError) as exc:
             return jsonify(error=str(exc)), 400
-        n = ingest(events, cfg.EVENTS_CHANNEL)
-        return jsonify(accepted=n), 202
+        return jsonify(accepted=ingest(events, cfg.EVENTS_CHANNEL, cfg.DIM_KEYS)), 202
+
+    # ---------------- ingest: trusted producers (connectors, simulator) ----------------
+    @app.post("/api/events")
+    def post_events():
+        body = request.get_json(silent=True)
+        raw = body.get("events") if isinstance(body, dict) and "events" in body else [body]
+        return _accept(raw)
+
+    # ---------------- ingest: browser beacons from the personal website ----------------
+    # navigator.sendBeacon posts text/plain (no CORS preflight), so parse the raw body.
+    # Source is forced to "site"; bots are dropped; per-IP rate limit; IP is never stored.
+    @app.route("/api/collect", methods=["POST", "OPTIONS"])
+    def collect():
+        if request.method == "OPTIONS":
+            return "", 204
+        origin = request.headers.get("Origin")
+        if cfg.COLLECT_ORIGINS and origin not in cfg.COLLECT_ORIGINS:
+            return jsonify(error="origin not allowed"), 403
+        ua = (request.headers.get("User-Agent") or "").lower()
+        if not ua or any(b in ua for b in BOT_UA):
+            return "", 204
+        ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0]
+        key = f"rl:collect:{ip}:{int(time.time() // 60)}"
+        pipe = r().pipeline()
+        pipe.incr(key)
+        pipe.expire(key, 120)
+        if pipe.execute()[0] > cfg.COLLECT_RATE_PER_MIN:
+            return jsonify(error="rate limited"), 429
+        try:
+            body = json.loads(request.get_data(as_text=True) or "{}")
+        except ValueError:
+            return jsonify(error="invalid JSON"), 400
+        raw = body.get("events") if isinstance(body, dict) else None
+        if isinstance(raw, list) and len(raw) > 20:
+            return jsonify(error="max 20 events per beacon"), 413
+        return _accept(raw, source="site")
 
     # ---------------- read API ----------------
     def _minutes():
         return max(1, min(int(request.args.get("minutes", 60)), 7 * 24 * 60))
 
+    def _source():
+        s = request.args.get("source", "site")
+        if not SOURCE_RE.match(s):
+            raise ValidationError("bad source")
+        return s
+
+    @app.errorhandler(ValidationError)
+    def bad_request(exc):
+        return jsonify(error=str(exc)), 400
+
+    @app.get("/api/sources")
+    def sources():
+        return jsonify(cfg.SOURCES)
+
     @app.get("/api/stats/summary")
     def summary():
-        return jsonify(stats.live_summary())
+        return jsonify(stats.all_summaries(cfg.SOURCES))
 
     @app.get("/api/stats/timeseries")
     def ts():
-        return jsonify(stats.timeseries(_minutes()))
+        return jsonify(stats.timeseries(_source(), _minutes()))
 
     @app.get("/api/stats/breakdown")
     def bd():
-        return jsonify(stats.breakdown(_minutes()))
+        return jsonify(stats.breakdown(_source(), _minutes()))
+
+    @app.get("/api/stats/dims")
+    def dims():
+        key = request.args.get("key", "")
+        if key not in cfg.DIM_KEYS:
+            return jsonify(error=f"key must be one of {cfg.DIM_KEYS}"), 400
+        limit = max(1, min(int(request.args.get("limit", 10)), 50))
+        return jsonify(stats.dims(_source(), key, _minutes(), limit))
 
     @app.get("/api/events/recent")
     def recent():
-        return jsonify(stats.recent(max(1, min(int(request.args.get("limit", 50)), 200))))
+        return jsonify(stats.recent(_source(), max(1, min(int(request.args.get("limit", 50)), 200))))
 
     # ---------------- WebSocket ----------------
     @sock.route("/ws")
     def ws(conn):
-        client = hub.register()
+        # /ws?source=wikipedia -> only that stream's events (stats frames go to everyone)
+        src = request.args.get("source", "*")
+        client = hub.register(src if src == "*" or SOURCE_RE.match(src) else "*")
         try:
-            conn.send(json.dumps({"kind": "hello", **stats.live_summary()}))
+            conn.send(json.dumps({"kind": "hello", **stats.all_summaries(cfg.SOURCES)}))
             while True:
                 try:
                     frame = client.q.get(timeout=cfg.WS_PING_SECONDS)
@@ -89,6 +155,15 @@ def create_app(cfg=Config) -> Flask:
             pass
         finally:
             hub.unregister(client)
+
+    # ---------------- tracker script for the personal website ----------------
+    tracker_js = (Path(__file__).resolve().parents[2] / "tracker" / "rta.js")
+    if not tracker_js.exists():                      # container layout: /app/tracker/rta.js
+        tracker_js = Path(__file__).resolve().parents[1] / "tracker" / "rta.js"
+
+    @app.get("/rta.js")
+    def rta_js():
+        return send_file(tracker_js, mimetype="application/javascript", max_age=3600)
 
     # ---------------- ops ----------------
     @app.get("/healthz")
