@@ -9,6 +9,10 @@ ON_VERCEL = bool(os.getenv("VERCEL"))
 class Config:
     DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
                     or "postgresql://postgres:postgres@localhost:5432/analytics")
+    # Session-level advisory locks need a direct connection: through a transaction-mode pooler
+    # (Neon's default DATABASE_URL) lock/unlock can land on different server connections.
+    DIRECT_DATABASE_URL = (os.getenv("DATABASE_URL_UNPOOLED") or os.getenv("POSTGRES_URL_NON_POOLING")
+                           or DATABASE_URL)
     # Empty string = run without Redis (Postgres-only mode).
     REDIS_URL = os.getenv("REDIS_URL", os.getenv("KV_URL", "" if ON_VERCEL else "redis://localhost:6379/0"))
     REALTIME = os.getenv("REALTIME", "poll" if ON_VERCEL else "ws")     # "ws" | "poll"
