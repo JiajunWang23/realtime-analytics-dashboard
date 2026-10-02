@@ -1,74 +1,139 @@
 // Per-stream presentation config. Color follows the entity (event type) via a fixed slot,
 // never its rank, so a type keeps its color as counts reorder.
+
+// ---- human-readable names --------------------------------------------------------
+const PROJECTS = [
+  ["wiktionary", "Wiktionary"], ["wikisource", "Wikisource"], ["wikiquote", "Wikiquote"],
+  ["wikibooks", "Wikibooks"], ["wikinews", "Wikinews"], ["wikivoyage", "Wikivoyage"],
+  ["wikiversity", "Wikiversity"], ["wiki", "Wikipedia"],
+];
+const SPECIAL_WIKIS = {
+  commonswiki: "Wikimedia Commons (media)", wikidatawiki: "Wikidata (structured data)",
+  metawiki: "Meta-Wiki", specieswiki: "Wikispecies", mediawikiwiki: "MediaWiki.org",
+  wikifunctionswiki: "Wikifunctions", incubatorwiki: "Wikimedia Incubator",
+};
+let langNames = null;
+try { langNames = new Intl.DisplayNames(["en"], { type: "language" }); } catch { /* old browser */ }
+
+/** "enwiktionary" -> "English Wiktionary", "zhwikisource" -> "Chinese Wikisource". */
+export function wikiName(code) {
+  if (!code) return "";
+  if (SPECIAL_WIKIS[code]) return SPECIAL_WIKIS[code];
+  for (const [suffix, project] of PROJECTS) {
+    if (code.endsWith(suffix) && code.length > suffix.length) {
+      const lang = code.slice(0, -suffix.length).replace(/_/g, "-");
+      let name = lang;
+      try { name = langNames?.of(lang) || lang; } catch { /* unknown code */ }
+      return name === lang ? `${project} (${lang})` : `${name} ${project}`;
+    }
+  }
+  return code;
+}
+
+const REFERRERS = {
+  linkedin: "LinkedIn", github: "GitHub", google: "Google search", search: "Other search engines",
+  x: "X / Twitter", handshake: "Handshake", direct: "Direct / bookmark",
+};
+const TARGETS = {
+  github: "GitHub profile", linkedin: "LinkedIn profile", resume: "Résumé", email: "Email me",
+  project: "A project page", external: "Other external link",
+};
+
 export const SOURCES = {
-  site: {
-    label: "My Website",
-    subtitle: "uiucwangjiajun.com · first-party tracker",
-    typeSlots: { page_view: 1, link_click: 2, engaged: 3 },
-    kpis: {
-      today: "Page events today",
-      lastMin: "Events last minute",
-      active: "Visitors now",
-      activeHint: "unique, last 5 min",
-      uniqueToday: "Unique visitors today",
-    },
-    shareKpi: { dim: "ref_source", value: "linkedin", label: "From LinkedIn", hint: "share of events, last 60 min" },
-    dims: [
-      { key: "ref_source", title: "Where visitors come from" },
-      { key: "target", title: "What they click" },
-      { key: "path", title: "Top pages" },
-    ],
-    feedRow: (e) => ({
-      main: e.type === "link_click" ? `clicked ${e.props?.target}` : e.type.replace("_", " "),
-      secondary: e.props?.path || "",
-      tertiary: `via ${e.props?.ref_source || "direct"}`,
-    }),
-    empty: "No visitors yet. Add the tracker snippet to your site to see live traffic here.",
-  },
   wikipedia: {
-    label: "Wikipedia Live",
-    subtitle: "All Wikimedia projects · EventStreams recentchange",
+    label: "Wikipedia, live",
+    headline: "Every change being made to Wikipedia right now",
+    blurb:
+      "Wikipedia and its sister sites (Wiktionary, Wikidata, Commons, …) publish a public live feed " +
+      "of every edit, new page, and category update, from anyone, in any language, about 30 per second. " +
+      "This dashboard streams that feed in, stores and aggregates it, and shows what is happening at this moment.",
+    note: "Data is pulled while someone has this page open, so quiet stretches on the chart are times nobody was watching.",
     typeSlots: { edit: 1, categorize: 2, new: 3, log: 4 },
-    kpis: {
-      today: "Changes today",
-      lastMin: "Changes last minute",
-      active: "Active editors",
-      activeHint: "unique, last 5 min",
-      uniqueToday: "Unique editors today",
+    typeLabels: {
+      edit: "Edits to existing pages", categorize: "Category updates", new: "New pages created",
+      log: "Logged actions (uploads, moves, blocks…)",
     },
-    shareKpi: { dim: "bot", value: "bot", label: "Made by bots", hint: "share of changes, last 60 min" },
+    kpis: {
+      today: { label: "Changes today", hint: (s) => `${fmtN(s?.events_last_minute)} in the last minute` },
+      active: { label: "People & bots editing now", hint: () => "distinct accounts, last 5 minutes" },
+      uniqueToday: { label: "Distinct editors today", hint: () => "estimated with HyperLogLog" },
+    },
+    shareKpi: { dim: "bot", value: "bot", label: "Changes made by bots",
+                hint: "automated accounts, last 60 min" },
+    chartTitle: "Changes per minute",
     dims: [
-      { key: "wiki", title: "Most active wikis" },
-      { key: "bot", title: "Bots vs humans" },
+      { key: "wiki", title: "Which sites are busiest", format: wikiName },
+      { key: "bot", title: "Who is making the changes",
+        format: (v) => (v === "bot" ? "Bots (automated accounts)" : "Humans") },
     ],
-    feedRow: (e) => ({
+    feedTitle: "Latest changes (click a title to open the page)",
+    feedRow: (e, cfg) => ({
       main: e.props?.title || "(untitled)",
       href: e.props?.url,
-      secondary: e.props?.wiki || "",
-      tertiary: `${e.type}${e.props?.bot === "bot" ? " · bot" : ""}`,
+      secondary: wikiName(e.props?.wiki),
+      tertiary: `${cfg.typeShort[e.type] || e.type}${e.props?.bot === "bot" ? " · bot" : ""}`,
     }),
-    empty: "Waiting for the Wikipedia connector…",
+    typeShort: { edit: "Edit", categorize: "Category", new: "New page", log: "Log action" },
+    empty: "Connecting to the Wikipedia feed… the first changes usually appear within a few seconds.",
+  },
+  site: {
+    label: "My portfolio site",
+    headline: "Who is visiting uiucwangjiajun.com, and what they do",
+    blurb:
+      "A small tracking script on my personal website reports page views, which links visitors click " +
+      "(GitHub, résumé, LinkedIn…), and where they came from, e.g. a LinkedIn post. It's the same " +
+      "pipeline as the Wikipedia tab, fed by real visitors instead of a public feed.",
+    note: "Privacy: no cookies, no IP addresses stored, Do Not Track respected, bots filtered out.",
+    typeSlots: { page_view: 1, link_click: 2, engaged: 3 },
+    typeLabels: {
+      page_view: "Page views", link_click: "Link clicks", engaged: "Stayed 30s+ on a page",
+    },
+    kpis: {
+      today: { label: "Interactions today", hint: (s) => `${fmtN(s?.events_last_minute)} in the last minute` },
+      active: { label: "Visitors right now", hint: () => "distinct visitors, last 5 minutes" },
+      uniqueToday: { label: "Visitors today", hint: () => "distinct visitors (estimated)" },
+    },
+    shareKpi: { dim: "ref_source", value: "linkedin", label: "Came from LinkedIn",
+                hint: "share of activity, last 60 min" },
+    chartTitle: "Interactions per minute",
+    dims: [
+      { key: "ref_source", title: "Where visitors come from", format: (v) => REFERRERS[v] || v },
+      { key: "target", title: "What they click", format: (v) => TARGETS[v] || v },
+      { key: "path", title: "Most viewed pages", format: (v) => (v === "/" ? "Home page" : v) },
+    ],
+    feedTitle: "Latest visitor activity",
+    feedRow: (e) => ({
+      main: e.type === "link_click" ? `Clicked: ${TARGETS[e.props?.target] || e.props?.target}`
+        : e.type === "engaged" ? "Read for 30s+" : "Viewed a page",
+      secondary: e.props?.path === "/" ? "Home page" : e.props?.path || "",
+      tertiary: `from ${REFERRERS[e.props?.ref_source] || e.props?.ref_source || "direct"}`,
+    }),
+    empty: "No visitors yet today. Visit uiucwangjiajun.com in another tab and watch yourself appear here.",
   },
   demo: {
-    label: "Simulator",
-    subtitle: "synthetic e-commerce traffic for load tests",
+    label: "Load test",
+    hidden: true, // only reachable via #demo: synthetic traffic used for benchmarks
+    headline: "Synthetic traffic used for load testing",
+    blurb: "Simulated e-commerce events from scripts/simulate.py, used to benchmark throughput and latency.",
     typeSlots: { page_view: 1, click: 2, add_to_cart: 3, purchase: 4, signup: 5, bench: 7, error: 8 },
+    typeLabels: {},
     kpis: {
-      today: "Events today",
-      lastMin: "Events last minute",
-      active: "Active users",
-      activeHint: "unique, last 5 min",
-      uniqueToday: "Unique users today",
+      today: { label: "Events today", hint: (s) => `${fmtN(s?.events_last_minute)} in the last minute` },
+      active: { label: "Active users", hint: () => "last 5 minutes" },
+      uniqueToday: { label: "Unique users today", hint: () => "HyperLogLog estimate" },
     },
     shareKpi: null,
+    chartTitle: "Events per minute",
     dims: [{ key: "path", title: "Top pages" }],
-    feedRow: (e) => ({ main: e.type, secondary: e.user_id, tertiary: e.props?.page || "" }),
+    feedTitle: "Latest events",
+    feedRow: (e) => ({ main: e.type, secondary: e.user_id, tertiary: e.props?.path || "" }),
     empty: "Run scripts/simulate.py to generate traffic.",
   },
 };
 
-export const DIM_KEYS = [...new Set(Object.values(SOURCES).flatMap((s) => s.dims.map((d) => d.key)
-  .concat(s.shareKpi ? [s.shareKpi.dim] : [])))];
+function fmtN(n) {
+  return n == null ? "—" : Intl.NumberFormat("en-US").format(n);
+}
 
 export const colorOf = (source, type) => {
   const slot = SOURCES[source]?.typeSlots[type];

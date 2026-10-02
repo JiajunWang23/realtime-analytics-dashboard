@@ -39,7 +39,7 @@ const getJSON = (path) =>
 
 // Ask the server which realtime transport it supports (WebSocket, or polling on serverless).
 let transportPromise = null;
-const transport = () =>
+export const transport = () =>
   (transportPromise ||= getJSON("/api/config").catch(() => ({ realtime: "ws", wiki_pull: false })));
 
 const dimKeysFor = (s) => {
