@@ -51,7 +51,7 @@ export const SOURCES = {
     typeSlots: { edit: 1, categorize: 2, new: 3, log: 4 },
     typeLabels: {
       edit: "Edits to existing pages", categorize: "Category updates", new: "New pages created",
-      log: "Logged actions (uploads, moves, blocks…)",
+      log: "Uploads, moves & admin actions",
     },
     kpis: {
       today: { label: "Changes today", hint: (s) => `${fmtN(s?.events_last_minute)} in the last minute` },
