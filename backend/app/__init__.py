@@ -7,13 +7,11 @@ import time
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
-from flask_sock import Sock
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import stats
 from .config import Config
 from .db import apply_schema, get_conn, init_pool
-from .hub import Hub
 from .ingest import SOURCE_RE, ValidationError, ingest, validate
 from .metrics import WS_FRAMES
 from .redis_client import init_redis, r
@@ -26,14 +24,21 @@ BOT_UA = ("bot", "crawl", "spider", "slurp", "headless", "lighthouse", "preview"
 def create_app(cfg=Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(cfg)
-    sock = Sock(app)
-    app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": cfg.WS_PING_SECONDS}
 
     init_pool(cfg)
     init_redis(cfg)
     apply_schema()
-    hub = Hub(cfg)
-    hub.start()
+    # WebSocket fan-out needs long-lived processes + Redis pub/sub. Where that's not available
+    # (serverless), clients poll /api/live instead and the same data flows through Postgres.
+    ws_enabled = cfg.REALTIME == "ws" and r() is not None
+    if ws_enabled:
+        from flask_sock import Sock
+        from .hub import Hub
+        sock = Sock(app)
+        app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": cfg.WS_PING_SECONDS}
+        hub = Hub(cfg)
+        hub.start()
+    local_rate: dict[str, int] = {}
 
     @app.after_request
     def cors(resp):
@@ -81,10 +86,16 @@ def create_app(cfg=Config) -> Flask:
             return "", 204
         ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0]
         key = f"rl:collect:{ip}:{int(time.time() // 60)}"
-        pipe = r().pipeline()
-        pipe.incr(key)
-        pipe.expire(key, 120)
-        if pipe.execute()[0] > cfg.COLLECT_RATE_PER_MIN:
+        if r() is not None:
+            pipe = r().pipeline()
+            pipe.incr(key)
+            pipe.expire(key, 120)
+            hits = pipe.execute()[0]
+        else:                                  # per-instance limit when there's no Redis
+            if len(local_rate) > 10_000:
+                local_rate.clear()
+            hits = local_rate[key] = local_rate.get(key, 0) + 1
+        if hits > cfg.COLLECT_RATE_PER_MIN:
             return jsonify(error="rate limited"), 429
         try:
             body = json.loads(request.get_data(as_text=True) or "{}")
@@ -137,8 +148,31 @@ def create_app(cfg=Config) -> Flask:
     def recent():
         return jsonify(stats.recent(_source(), max(1, min(int(request.args.get("limit", 50)), 200))))
 
+    @app.get("/api/config")
+    def client_config():
+        return jsonify(realtime="ws" if ws_enabled else "poll", wiki_pull=cfg.WIKI_PULL_ENABLED)
+
+    # ---------------- polling transport (used when WebSockets aren't available) ----------------
+    @app.get("/api/live")
+    def live():
+        after = request.args.get("after")
+        limit = max(1, min(int(request.args.get("limit", 500)), 1000))
+        return jsonify(stats.live(_source(), int(after) if after not in (None, "") else None, limit))
+
+    # ---------------- on-demand Wikipedia pull (serverless replacement for the connector) -------
+    @app.route("/api/ingest/wikipedia", methods=["GET", "POST"])
+    def wiki_pull():
+        if not cfg.WIKI_PULL_ENABLED:
+            return jsonify(status="disabled", detail="the always-on connector is used instead"), 404
+        from .wikipull import pull
+        seconds = max(1, min(int(request.args.get("seconds", cfg.WIKI_PULL_SECONDS)), cfg.WIKI_PULL_MAX_SECONDS))
+        try:
+            return jsonify(pull(cfg, seconds))
+        except Exception as exc:              # upstream stream hiccup: report, don't 500-loop
+            logging.getLogger(__name__).warning("wikipedia pull failed: %s", exc)
+            return jsonify(status="error", error=str(exc)), 502
+
     # ---------------- WebSocket ----------------
-    @sock.route("/ws")
     def ws(conn):
         # /ws?source=wikipedia -> only that stream's events (stats frames go to everyone)
         src = request.args.get("source", "*")
@@ -156,6 +190,9 @@ def create_app(cfg=Config) -> Flask:
             pass
         finally:
             hub.unregister(client)
+
+    if ws_enabled:
+        sock.route("/ws")(ws)
 
     # ---------------- tracker script for the personal website ----------------
     tracker_js = (Path(__file__).resolve().parents[2] / "tracker" / "rta.js")
@@ -189,7 +226,8 @@ def create_app(cfg=Config) -> Flask:
     @app.get("/readyz")
     def readyz():
         try:
-            r().ping()
+            if r() is not None:
+                r().ping()
             with get_conn() as c, c.cursor() as cur:
                 cur.execute("SELECT 1")
             return jsonify(status="ready")

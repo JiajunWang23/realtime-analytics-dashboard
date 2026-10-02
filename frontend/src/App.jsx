@@ -134,7 +134,8 @@ export default function App() {
         )}
         <Kpi label="Event → screen" value={latency.p50 == null ? "—" : Math.round(latency.p50)} unit="ms"
              hint={latency.p95 == null ? "p50 · waiting for events"
-               : `p50 · p95 ${Math.round(latency.p95)} ms · ${fmt(wsClients)} viewer${wsClients === 1 ? "" : "s"}`} />
+               : `p50 · p95 ${Math.round(latency.p95)} ms` +
+                 (wsClients == null ? "" : ` · ${fmt(wsClients)} viewer${wsClients === 1 ? "" : "s"}`)} />
       </section>
 
       {isEmpty && <div className="empty-banner">{cfg.empty}</div>}

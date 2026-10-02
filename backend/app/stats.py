@@ -1,4 +1,6 @@
-"""Read side. Live KPIs come from Redis (O(1)); history comes from the Postgres rollup."""
+"""Read side. Live KPIs come from Redis (O(1)) when it's configured; otherwise (Postgres-only
+mode, e.g. on Vercel) the same numbers are computed from the rollup table and raw events.
+History always comes from the Postgres rollup."""
 import json
 import time
 from collections import Counter
@@ -10,7 +12,38 @@ from .db import get_conn
 from .redis_client import r
 
 
+def _payload(row) -> dict:
+    return {"id": row["id"], "source": row["source"], "type": row["event_type"],
+            "user_id": row["user_id"], "value": row["value"], "props": row["props"],
+            "occurred_at": row["occurred_at"].isoformat(),
+            "ingested_at": int(row["ingested_at"].timestamp() * 1000)}
+
+
+def _live_summary_pg(source: str) -> dict:
+    sql = """
+        WITH day AS (SELECT date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS start)
+        SELECT
+          COALESCE(SUM(cnt) FILTER (WHERE bucket = date_trunc('minute', now()) - interval '1 minute'), 0),
+          COALESCE(SUM(cnt) FILTER (WHERE bucket = date_trunc('minute', now())), 0),
+          COALESCE(SUM(cnt) FILTER (WHERE bucket >= (SELECT start FROM day)), 0),
+          (SELECT count(DISTINCT user_id) FROM events
+             WHERE source = %(s)s AND occurred_at >= now() - interval '5 minutes'),
+          (SELECT count(DISTINCT user_id) FROM events
+             WHERE source = %(s)s AND occurred_at >= (SELECT start FROM day))
+        FROM event_rollup_minute
+        WHERE source = %(s)s AND bucket >= LEAST((SELECT start FROM day), now() - interval '2 minutes')
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, {"s": source})
+        last_min, cur_min, total, active, uniq = cur.fetchone()
+    return {"events_last_minute": int(last_min), "events_this_minute": int(cur_min),
+            "events_today": int(total), "active_users_5m": int(active),
+            "unique_users_today": int(uniq)}
+
+
 def live_summary(source: str) -> dict:
+    if r() is None:
+        return _live_summary_pg(source)
     now_min = int(time.time() // 60)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
     pipe = r().pipeline(transaction=False)
@@ -29,7 +62,9 @@ def live_summary(source: str) -> dict:
     }
 
 
-def ws_clients() -> int:
+def ws_clients() -> int | None:
+    if r() is None:
+        return None
     keys = list(r().scan_iter("ws:clients:*", count=100))   # one heartbeat key per worker
     return sum(int(v or 0) for v in r().mget(keys)) if keys else 0
 
@@ -41,6 +76,16 @@ def all_summaries(sources: list[str]) -> dict:
 
 def dims(source: str, key: str, minutes: int = 60, limit: int = 10) -> list[dict]:
     """Top-N values of props[key] over the last `minutes`, merged from per-minute Redis hashes."""
+    if r() is None:
+        sql = """
+            SELECT props->>%(k)s AS value, count(*) AS count FROM events
+            WHERE source = %(s)s AND occurred_at >= now() - make_interval(mins => %(m)s)
+              AND props ? %(k)s
+            GROUP BY 1 ORDER BY 2 DESC LIMIT %(n)s
+        """
+        with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, {"k": key, "s": source, "m": minutes, "n": limit})
+            return [dict(row) for row in cur.fetchall()]
     now_min = int(time.time() // 60)
     pipe = r().pipeline(transaction=False)
     for m in range(now_min - minutes + 1, now_min + 1):
@@ -79,4 +124,21 @@ def breakdown(source: str, minutes: int = 60) -> list[dict]:
 
 
 def recent(source: str, limit: int = 50) -> list[dict]:
+    if r() is None:
+        with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM events WHERE source = %s ORDER BY id DESC LIMIT %s", (source, limit))
+            return [_payload(row) for row in cur.fetchall()]
     return [json.loads(x) for x in r().lrange(f"feed:{source}", 0, limit - 1)]
+
+
+def live(source: str, after: int | None, limit: int = 500) -> dict:
+    """Cursor-based polling (the realtime transport where WebSockets aren't available).
+    Without `after`, returns only the current cursor so the client starts from 'now'."""
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        if after is None:
+            cur.execute("SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE source = %s", (source,))
+            return {"events": [], "cursor": cur.fetchone()["id"]}
+        cur.execute("SELECT * FROM events WHERE source = %s AND id > %s ORDER BY id LIMIT %s",
+                    (source, after, limit))
+        rows = cur.fetchall()
+    return {"events": [_payload(row) for row in rows], "cursor": rows[-1]["id"] if rows else after}

@@ -1,0 +1,6 @@
+# Python deps for the Vercel function (api/index.py). The container image uses backend/requirements.txt.
+flask==3.1.*
+psycopg2-binary==2.9.*
+redis==5.*
+requests==2.*
+prometheus-client==0.21.*

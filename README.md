@@ -109,6 +109,21 @@ python connectors/wikipedia.py                             # live Wikipedia stre
 python scripts/simulate.py --rate 15 --batch 3             # optional synthetic traffic
 ```
 
+### Vercel (serverless demo)
+The repo deploys to Vercel as-is (`vercel.json`): the React app is built from `frontend/`,
+and the same Flask app runs as a Python function (`api/index.py`). Vercel has no WebSockets
+or always-on processes, so in this mode the backend switches automatically:
+
+| Always-on deployment (Docker / K8s / local) | Vercel |
+|---|---|
+| WebSocket push, Redis pub/sub fan-out | HTTP polling of `/api/live` with an id cursor (~1 s latency) |
+| Always-on Wikipedia connector | `/api/ingest/wikipedia`: pulled on demand while someone has the dashboard open. A Postgres advisory lock means concurrent viewers share one pull; back-to-back pulls resume via Last-Event-ID |
+| Redis counters, HyperLogLog, top-N hashes | Same numbers computed in Postgres (Redis is used if `REDIS_URL` is set) |
+| Raw events kept | Raw Wikipedia rows pruned after `WIKI_RETENTION_HOURS` (default 48); rollups kept |
+
+Setup: import the repo in Vercel → **Storage → Create Database → Neon (Postgres)** and connect
+it to the project (this sets `DATABASE_URL`) → redeploy. Tables are created on first request.
+
 ### Docker Compose
 ```bash
 docker compose up --build                                  # dashboard on http://localhost:8080, Wikipedia connector included
