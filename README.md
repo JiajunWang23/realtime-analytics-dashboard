@@ -122,7 +122,9 @@ or always-on processes, so in this mode the backend switches automatically:
 | Raw events kept | Raw Wikipedia rows pruned after `WIKI_RETENTION_HOURS` (default 48); rollups kept |
 
 Setup: import the repo in Vercel → **Storage → Create Database → Neon (Postgres)** and connect
-it to the project (this sets `DATABASE_URL`) → redeploy. Tables are created on first request.
+it to the project with the env prefix `DATABASE` (this sets `DATABASE_URL` and
+`DATABASE_URL_UNPOOLED`; the latter is used for the pull lock) → redeploy. Tables are created
+on first request.
 
 ### Docker Compose
 ```bash

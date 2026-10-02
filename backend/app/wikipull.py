@@ -52,7 +52,7 @@ def to_event(rc: dict) -> dict | None:
 
 
 def pull(cfg, seconds: int) -> dict:
-    lock_conn = psycopg2.connect(cfg.DATABASE_URL)
+    lock_conn = psycopg2.connect(cfg.DIRECT_DATABASE_URL)   # direct, not pooled: session lock
     lock_conn.autocommit = True
     cur = lock_conn.cursor()
     try:
