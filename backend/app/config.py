@@ -27,7 +27,7 @@ class Config:
     WS_PING_SECONDS = int(os.getenv("WS_PING_SECONDS", "20"))
     CORS_ORIGIN = os.getenv("CORS_ORIGIN", "*")
     # Streams shown on the dashboard; per-source KPIs are broadcast for each.
-    SOURCES = os.getenv("SOURCES", "site,wikipedia,demo").split(",")
+    SOURCES = os.getenv("SOURCES", "wikipedia" if ON_VERCEL else "site,wikipedia,demo").split(",")
     # props keys that get live top-N counters in Redis (cheap breakdowns, no SQL).
     DIM_KEYS = os.getenv("DIM_KEYS", "ref_source,path,target,wiki,bot").split(",")
     # /api/collect: browser beacons from the personal website.

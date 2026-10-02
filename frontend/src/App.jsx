@@ -6,24 +6,10 @@ import "./App.css";
 
 const REPO = "https://github.com/JiajunWang23/realtime-analytics-dashboard";
 const AUTHOR_SITE = "https://uiucwangjiajun.com";
-const TAB_ORDER = ["wikipedia", "site", "demo"];
+const SOURCE = "wikipedia";
 const fmt = (n) => (n == null ? "—" : Intl.NumberFormat("en-US").format(n));
 const pct = (n) => (n == null ? "—" : `${Math.round(n * 100)}`);
 const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
-function useHashTab() {
-  const read = () => {
-    const h = location.hash.slice(1);
-    return SOURCES[h] ? h : TAB_ORDER[0];
-  };
-  const [tab, setTab] = useState(read);
-  useEffect(() => {
-    const on = () => setTab(read());
-    window.addEventListener("hashchange", on);
-    return () => window.removeEventListener("hashchange", on);
-  }, []);
-  return [tab, (t) => { location.hash = t; }];
-}
 
 function useRealtimeMode() {
   const [mode, setMode] = useState(null);
@@ -88,11 +74,9 @@ function SeriesTooltip({ active, payload, source }) {
   );
 }
 
-function Pipeline({ source, mode, latency }) {
+function Pipeline({ mode, latency }) {
   const steps = [
-    source === "site"
-      ? { n: 1, title: "Visitors", body: "A tracking script on uiucwangjiajun.com sends page views and clicks." }
-      : { n: 1, title: "Wikipedia's live feed", body: "Wikimedia publishes every change as a server-sent event stream." },
+    { n: 1, title: "Wikipedia's live feed", body: "Wikimedia publishes every change as a server-sent event stream." },
     { n: 2, title: "Ingest API", body: "Python + Flask validates each event and writes it in batches." },
     { n: 3, title: "PostgreSQL", body: "Raw events plus per-minute summaries, indexed so charts stay fast at 5M+ rows." },
     mode === "ws"
@@ -116,11 +100,10 @@ function Pipeline({ source, mode, latency }) {
 }
 
 export default function App() {
-  const [source, setSource] = useHashTab();
+  const source = SOURCE;
   const mode = useRealtimeMode();
   const cfg = SOURCES[source];
   const { status, summary, series, breakdown, dims, feed, latency } = useLiveStream(source);
-  const tabs = TAB_ORDER.filter((s) => !SOURCES[s].hidden || s === source);
 
   const typeRows = Object.entries(breakdown)
     .map(([key, count]) => ({ key, label: cfg.typeLabels[key] || key, count }))
@@ -146,7 +129,7 @@ export default function App() {
         <h1>Real-Time Analytics Dashboard</h1>
         <p className="lede">
           A live data pipeline you can watch working. Events stream in from the outside world, get stored and
-          aggregated in a database, and show up on this page about a second later. Pick a data source below.
+          aggregated in a database, and show up on this page about a second later.
         </p>
         <div className="hero-links">
           <a className="btn" href={REPO} target="_blank" rel="noreferrer">View the code on GitHub</a>
@@ -160,14 +143,6 @@ export default function App() {
         </div>
       </header>
 
-      <nav className="tabs" role="tablist" aria-label="Data source">
-        {tabs.map((s) => (
-          <button key={s} role="tab" aria-selected={s === source}
-                  className={s === source ? "tab active" : "tab"} onClick={() => setSource(s)}>
-            {SOURCES[s].label}
-          </button>
-        ))}
-      </nav>
 
       <section className="explain">
         <h2 className="headline">{cfg.headline}</h2>
@@ -240,7 +215,7 @@ export default function App() {
       <section className="how" id="how">
         <h2 className="headline">How it works</h2>
         <p>Every number on this page travels through the same five steps:</p>
-        <Pipeline source={source} mode={mode} latency={latency} />
+        <Pipeline mode={mode} latency={latency} />
         <p className="stack">
           <strong>Built with</strong> Python · Flask · PostgreSQL · Redis · WebSocket · React · Docker · Kubernetes
           {mode === "poll" ? " · deployed here on Vercel + Neon Postgres" : ""}
