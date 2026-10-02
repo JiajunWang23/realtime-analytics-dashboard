@@ -31,7 +31,16 @@ function wsUrl(source) {
   return `${base}?source=${encodeURIComponent(source)}`;
 }
 
-const getJSON = (path) => fetch(`${API}${path}`).then((r) => r.json());
+const getJSON = (path) =>
+  fetch(`${API}${path}`).then((r) => {
+    if (!r.ok) throw new Error(`${r.status} ${path}`);
+    return r.json();
+  });
+
+// Ask the server which realtime transport it supports (WebSocket, or polling on serverless).
+let transportPromise = null;
+const transport = () =>
+  (transportPromise ||= getJSON("/api/config").catch(() => ({ realtime: "ws", wiki_pull: false })));
 
 const dimKeysFor = (s) => {
   const cfg = SOURCES[s];
@@ -125,14 +134,23 @@ export function useLiveStream(source) {
     };
   }, [source]);
 
-  // ---- WebSocket with jittered exponential back-off ---------------------------
+  // ---- realtime transport: WebSocket, or HTTP polling where WS isn't available ----
   useEffect(() => {
     let ws;
     let retry = 0;
     let timer;
     let closed = false;
+    const onEvents = (events) => {
+      const s = sourceRef.current;
+      const now = Date.now(); // measure on arrival, not at the next 250 ms commit
+      for (const e of events) {
+        if (e.source !== s) continue;
+        buf.current.events.push(e);
+        if (e.ingested_at) lat.current.push(Math.max(0, now - e.ingested_at));
+      }
+    };
 
-    const connect = () => {
+    const connectWs = () => {
       setStatus(retry ? "reconnecting" : "connecting");
       ws = new WebSocket(wsUrl(source));
       ws.onopen = () => {
@@ -141,30 +159,59 @@ export function useLiveStream(source) {
       };
       ws.onmessage = (m) => {
         const msg = JSON.parse(m.data);
-        if (msg.kind === "events") {
-          const s = sourceRef.current;
-          const now = Date.now(); // measure on arrival, not at the next 250 ms commit
-          for (const e of msg.events) {
-            if (e.source !== s) continue;
-            buf.current.events.push(e);
-            if (e.ingested_at) lat.current.push(Math.max(0, now - e.ingested_at));
-          }
-        } else if (msg.kind === "stats" || msg.kind === "hello") {
-          buf.current.stats = msg;
-        }
+        if (msg.kind === "events") onEvents(msg.events);
+        else if (msg.kind === "stats" || msg.kind === "hello") buf.current.stats = msg;
       };
       ws.onclose = () => {
         if (closed) return;
         setStatus("reconnecting");
         const delay = Math.min(30_000, 500 * 2 ** retry++) * (0.5 + Math.random());
-        timer = setTimeout(connect, delay);
+        timer = setTimeout(connectWs, delay);
       };
       ws.onerror = () => ws.close();
     };
-    connect();
+
+    // Polling: new events every 1 s via a cursor, KPIs every 3 s. On serverless deploys the
+    // Wikipedia stream is also pulled on demand while someone is watching (server-side lock
+    // makes concurrent viewers share one pull).
+    const startPolling = (cfg) => {
+      let cursor = null;
+      let ticks = 0;
+      const pullWiki = () => {
+        if (source === "wikipedia" && cfg.wiki_pull)
+          fetch(`${API}/api/ingest/wikipedia?seconds=25`, { method: "POST" }).catch(() => {});
+      };
+      pullWiki();
+      const wikiTimer = setInterval(pullWiki, 20_000);
+      const poll = async () => {
+        if (closed) return;
+        try {
+          const q = cursor == null ? "" : `&after=${cursor}`;
+          const res = await getJSON(`/api/live?source=${source}${q}`);
+          if (cursor != null) onEvents(res.events);
+          cursor = res.cursor;
+          if (ticks++ % 3 === 0) buf.current.stats = await getJSON(`/api/stats/summary`);
+          setStatus("live");
+          timer = setTimeout(poll, 1000);
+        } catch {
+          setStatus("reconnecting");
+          timer = setTimeout(poll, Math.min(30_000, 1000 * 2 ** Math.min(retry++, 5)));
+        }
+      };
+      poll();
+      return () => clearInterval(wikiTimer);
+    };
+
+    let stopPolling = null;
+    transport().then((cfg) => {
+      if (closed) return;
+      if (cfg.realtime === "poll") stopPolling = startPolling(cfg);
+      else connectWs();
+    });
     return () => {
       closed = true;
       clearTimeout(timer);
+      stopPolling && stopPolling();
       ws && ws.close();
     };
   }, [source]);

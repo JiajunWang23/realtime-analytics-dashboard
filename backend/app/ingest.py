@@ -89,6 +89,11 @@ def ingest(events: list[dict], channel: str, dim_keys: list[str]) -> int:
             sorted((s, b, t, c, v) for (s, b, t), (c, v) in rollup.items()),
         )
 
+    if r() is None:                       # Postgres-only mode (e.g. Vercel)
+        EVENTS_INGESTED.inc(len(events))
+        INGEST_SECONDS.observe(time.perf_counter() - t0)
+        return len(events)
+
     # 2) Redis, one round trip: live counters, HyperLogLog uniques, dimension top-N,
     #    recent feed, and PUBLISH for the WebSocket fan-out.
     payload = [{

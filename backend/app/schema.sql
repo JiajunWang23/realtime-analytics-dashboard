@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_occurred_brin ON events USING BRIN (occurred_at);
 -- Composite B-tree for "per-source, per-type over a time window" drill-downs.
 CREATE INDEX IF NOT EXISTS events_src_type_time_idx ON events (source, event_type, occurred_at DESC);
+-- Cursor-based live polling: WHERE source = ? AND id > ? ORDER BY id.
+CREATE INDEX IF NOT EXISTS events_src_id_idx ON events (source, id);
 -- Per-user lookups (user timeline, active-user checks).
 CREATE INDEX IF NOT EXISTS events_user_time_idx ON events (user_id, occurred_at DESC);
 
@@ -28,4 +30,11 @@ CREATE TABLE IF NOT EXISTS event_rollup_minute (
     cnt         BIGINT           NOT NULL DEFAULT 0,
     value_sum   DOUBLE PRECISION NOT NULL DEFAULT 0,
     PRIMARY KEY (source, bucket, event_type)
+);
+
+-- Resume position for on-demand stream pulls (Last-Event-ID).
+CREATE TABLE IF NOT EXISTS connector_state (
+    name        TEXT PRIMARY KEY,
+    last_id     TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
