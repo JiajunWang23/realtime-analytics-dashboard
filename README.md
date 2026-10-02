@@ -7,8 +7,8 @@ WebSocket with sub-100 ms latency.
 | Stream | What it is | What the dashboard answers |
 |---|---|---|
 | **Wikipedia Live** (`source=wikipedia`) | Every edit, page creation, log action and category change across all Wikimedia projects, from the public [EventStreams](https://stream.wikimedia.org/v2/ui/) `recentchange` feed. ~30 events/s, **~2.5M events/day**. | How much is changing right now? Which wikis are most active? What share of changes are made by bots? Who is editing? |
-| **My Website** (`source=site`) | First-party tracker (`tracker/rta.js`) on [uiucwangjiajun.com](https://uiucwangjiajun.com). | How many people are on my site right now? How many come from my LinkedIn posts (vs GitHub, Google, Handshake…)? Which pages do they read, and do they click through to GitHub or my resume? |
-| Simulator (`source=demo`) | Synthetic traffic from `scripts/simulate.py`. | Load and latency benchmarks. |
+| Website tracker (`source=site`, API only, not shown on the dashboard) | First-party tracker (`tracker/rta.js`) on [uiucwangjiajun.com](https://uiucwangjiajun.com). | How many people are on my site right now? How many come from my LinkedIn posts (vs GitHub, Google, Handshake…)? Which pages do they read, and do they click through to GitHub or my resume? |
+| Simulator (`source=demo`, API only, not shown on the dashboard) | Synthetic traffic from `scripts/simulate.py`. | Load and latency benchmarks. |
 
 **Stack:** Python · Flask · gevent/gunicorn · flask-sock (WebSocket) · Redis (pub/sub, HyperLogLog,
 counters) · PostgreSQL · React + Vite + Recharts · Docker · Kubernetes (HPA, PDB, Ingress)

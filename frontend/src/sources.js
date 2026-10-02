@@ -30,14 +30,6 @@ export function wikiName(code) {
   return code;
 }
 
-const REFERRERS = {
-  linkedin: "LinkedIn", github: "GitHub", google: "Google search", search: "Other search engines",
-  x: "X / Twitter", handshake: "Handshake", direct: "Direct / bookmark",
-};
-const TARGETS = {
-  github: "GitHub profile", linkedin: "LinkedIn profile", resume: "Résumé", email: "Email me",
-  project: "A project page", external: "Other external link",
-};
 
 export const SOURCES = {
   wikipedia: {
@@ -75,59 +67,6 @@ export const SOURCES = {
     }),
     typeShort: { edit: "Edit", categorize: "Category", new: "New page", log: "Log action" },
     empty: "Connecting to the Wikipedia feed… the first changes usually appear within a few seconds.",
-  },
-  site: {
-    label: "My portfolio site",
-    headline: "Who is visiting uiucwangjiajun.com, and what they do",
-    blurb:
-      "A small tracking script on my personal website reports page views, which links visitors click " +
-      "(GitHub, résumé, LinkedIn…), and where they came from, e.g. a LinkedIn post. It's the same " +
-      "pipeline as the Wikipedia tab, fed by real visitors instead of a public feed.",
-    note: "Privacy: no cookies, no IP addresses stored, Do Not Track respected, bots filtered out.",
-    typeSlots: { page_view: 1, link_click: 2, engaged: 3 },
-    typeLabels: {
-      page_view: "Page views", link_click: "Link clicks", engaged: "Stayed 30s+ on a page",
-    },
-    kpis: {
-      today: { label: "Interactions today", hint: (s) => `${fmtN(s?.events_last_minute)} in the last minute` },
-      active: { label: "Visitors right now", hint: () => "distinct visitors, last 5 minutes" },
-      uniqueToday: { label: "Visitors today", hint: () => "distinct visitors (estimated)" },
-    },
-    shareKpi: { dim: "ref_source", value: "linkedin", label: "Came from LinkedIn",
-                hint: "share of activity, last 60 min" },
-    chartTitle: "Interactions per minute",
-    dims: [
-      { key: "ref_source", title: "Where visitors come from", format: (v) => REFERRERS[v] || v },
-      { key: "target", title: "What they click", format: (v) => TARGETS[v] || v },
-      { key: "path", title: "Most viewed pages", format: (v) => (v === "/" ? "Home page" : v) },
-    ],
-    feedTitle: "Latest visitor activity",
-    feedRow: (e) => ({
-      main: e.type === "link_click" ? `Clicked: ${TARGETS[e.props?.target] || e.props?.target}`
-        : e.type === "engaged" ? "Read for 30s+" : "Viewed a page",
-      secondary: e.props?.path === "/" ? "Home page" : e.props?.path || "",
-      tertiary: `from ${REFERRERS[e.props?.ref_source] || e.props?.ref_source || "direct"}`,
-    }),
-    empty: "No visitors yet today. Visit uiucwangjiajun.com in another tab and watch yourself appear here.",
-  },
-  demo: {
-    label: "Load test",
-    hidden: true, // only reachable via #demo: synthetic traffic used for benchmarks
-    headline: "Synthetic traffic used for load testing",
-    blurb: "Simulated e-commerce events from scripts/simulate.py, used to benchmark throughput and latency.",
-    typeSlots: { page_view: 1, click: 2, add_to_cart: 3, purchase: 4, signup: 5, bench: 7, error: 8 },
-    typeLabels: {},
-    kpis: {
-      today: { label: "Events today", hint: (s) => `${fmtN(s?.events_last_minute)} in the last minute` },
-      active: { label: "Active users", hint: () => "last 5 minutes" },
-      uniqueToday: { label: "Unique users today", hint: () => "HyperLogLog estimate" },
-    },
-    shareKpi: null,
-    chartTitle: "Events per minute",
-    dims: [{ key: "path", title: "Top pages" }],
-    feedTitle: "Latest events",
-    feedRow: (e) => ({ main: e.type, secondary: e.user_id, tertiary: e.props?.path || "" }),
-    empty: "Run scripts/simulate.py to generate traffic.",
   },
 };
 
