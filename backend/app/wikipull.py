@@ -10,7 +10,9 @@ every ~20 s. Each call:
     between back-to-back pulls), otherwise starts from "now";
   * reads the SSE stream for N seconds, ingesting through the normal ingest path in
     ~1 s batches (Postgres raw + rollup, Redis if configured);
-  * prunes raw Wikipedia rows older than WIKI_RETENTION_HOURS (rollups are kept).
+  * first prunes raw Wikipedia rows older than WIKI_RETENTION_HOURS and beyond WIKI_MAX_ROWS
+    (rollups are kept), so the free 512 MB Neon database never fills up. Pruning runs before
+    ingesting: if the disk is already full, inserts fail, so pruning afterwards would never run.
 """
 import json
 import logging
@@ -63,20 +65,56 @@ def pull(cfg, seconds: int) -> dict:
                        AND updated_at > now() - make_interval(secs => %s)""", (RESUME_WINDOW_S,))
         row = cur.fetchone()
         last_id = row[0] if row else None
+        pruned = _prune(cfg, cur)
         result = _read_stream(cfg, cur, seconds, last_id)
         result["resumed"] = last_id is not None
-        if cfg.WIKI_RETENTION_HOURS:
-            cur.execute("""DELETE FROM events WHERE id IN (
-                             SELECT id FROM events WHERE source = 'wikipedia'
-                             AND occurred_at < now() - make_interval(hours => %s) LIMIT 20000)""",
-                        (cfg.WIKI_RETENTION_HOURS,))
-            result["pruned"] = cur.rowcount
+        result["pruned"] = pruned
         return result
     finally:
         try:
             cur.execute("SELECT pg_advisory_unlock(%s)", (LOCK_KEY,))
         finally:
             lock_conn.close()
+
+
+PRUNE_CHUNK = 50_000
+PRUNE_BUDGET_S = 10
+
+
+def _prune(cfg, cur) -> int:
+    """Delete raw Wikipedia rows that are too old or beyond the row cap, in chunks, within a
+    time budget. Freed space is reused by later inserts after (auto)vacuum."""
+    if not (cfg.WIKI_RETENTION_HOURS or cfg.WIKI_MAX_ROWS):
+        return 0
+    total, start = 0, time.monotonic()
+    try:
+        cur.execute("SET statement_timeout = '15s'")
+        cutoff_id = None
+        if cfg.WIKI_MAX_ROWS:
+            # id is a BIGSERIAL, so "keep the newest N rows" is "delete id < max(id) - N".
+            cur.execute("SELECT max(id) FROM events WHERE source = 'wikipedia'")
+            top = cur.fetchone()[0]
+            if top is not None:
+                cutoff_id = top - cfg.WIKI_MAX_ROWS
+        while time.monotonic() - start < PRUNE_BUDGET_S:
+            cur.execute("""DELETE FROM events WHERE id IN (
+                             SELECT id FROM events WHERE source = 'wikipedia' AND (
+                               occurred_at < now() - make_interval(hours => %s) OR id < %s)
+                             LIMIT %s)""",
+                        (cfg.WIKI_RETENTION_HOURS or 100_000, cutoff_id or 0, PRUNE_CHUNK))
+            total += cur.rowcount
+            if cur.rowcount < PRUNE_CHUNK:
+                break
+        if total >= PRUNE_CHUNK:
+            cur.execute("VACUUM events")      # make the freed pages reusable right away
+    except psycopg2.Error as e:
+        log.warning("prune stopped early: %s", e)
+    finally:
+        try:
+            cur.execute("SET statement_timeout = 0")
+        except psycopg2.Error:
+            pass
+    return total
 
 
 def _save_cursor(cur, last_id):
