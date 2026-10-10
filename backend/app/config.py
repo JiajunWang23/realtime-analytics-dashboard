@@ -43,4 +43,6 @@ class Config:
     WIKI_PULL_SECONDS = int(os.getenv("WIKI_PULL_SECONDS", "25"))
     WIKI_PULL_MAX_SECONDS = int(os.getenv("WIKI_PULL_MAX_SECONDS", "45"))
     # Keep raw Wikipedia rows this long (rollups are kept forever). 0 = keep everything.
-    WIKI_RETENTION_HOURS = int(os.getenv("WIKI_RETENTION_HOURS", "48" if ON_VERCEL else "0"))
+    # Free Neon tier is 512 MB. ~300k raw rows plus indexes stay well under it; rollups are kept forever.
+    WIKI_RETENTION_HOURS = int(os.getenv("WIKI_RETENTION_HOURS", "24" if ON_VERCEL else "0"))
+    WIKI_MAX_ROWS = int(os.getenv("WIKI_MAX_ROWS", "300000" if ON_VERCEL else "0"))
