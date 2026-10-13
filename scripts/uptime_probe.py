@@ -23,7 +23,10 @@ def main(a):
         if total % 60 == 0:
             print(f"{time.strftime('%H:%M:%S')} uptime {100 * ok / total:.2f}% ({ok}/{total})")
         time.sleep(a.interval)
-    print(f"FINAL uptime {100 * ok / total:.3f}% over {total} probes")
+    if total == 0:
+        print("No probes completed. Check the monitoring duration.")
+    else:
+        print(f"FINAL uptime {100 * ok / total:.3f}% over {total} probes")
 
 
 if __name__ == "__main__":
