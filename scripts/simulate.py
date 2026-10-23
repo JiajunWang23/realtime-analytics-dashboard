@@ -30,7 +30,8 @@ async def main(a):
     t0 = time.time()
     async with aiohttp.ClientSession() as s:
         while a.total == 0 or sent < a.total:
-            batch = [make_event(a.users) for _ in range(a.batch)]
+            batch_size = a.batch if a.total == 0 else min(a.batch, a.total - sent)
+            batch = [make_event(a.users) for _ in range(batch_size)]
             try:
                 async with s.post(f"{a.url}/api/events", json={"events": batch}) as resp:
                     if resp.status != 202:
